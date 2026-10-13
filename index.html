@@ -125,6 +125,23 @@
     fetch(url, { method: "POST", body: msg }).catch(() => {});
   }
 
+  let es = null;
+  function listenStop() {
+    if (es) return;
+    es = new EventSource("https://ntfy.sh/" + encodeURIComponent(topic + "-stop") + "/sse");
+    es.onmessage = ev => {
+      try { if (JSON.parse(ev.data).event !== "message") return; } catch (e) { return; }
+      if (state === "armed" || state === "alarm") disarm(true);
+    };
+  }
+  function closeStop() { if (es) { es.close(); es = null; } }
+  function notifyAlarm() {
+    fetch("https://ntfy.sh", { method: "POST", body: JSON.stringify({
+      topic: topic, title: "Table Guard", priority: 5, message: "iPad was moved at the table!",
+      actions: [{ action: "http", label: "Stop siren", url: "https://ntfy.sh/" + topic + "-stop", method: "POST", body: "stop", clear: true }]
+    })}).catch(() => {});
+  }
+
   function onMotion(e) {
     const a = e.accelerationIncludingGravity;
     if (!a || a.x == null) return;
@@ -144,7 +161,7 @@
     if (state === "alarm") return;
     setState("alarm", "MOVED! Alarm on");
     sirenOn();
-    notify("iPad was moved at the table!");
+    notifyAlarm();
   }
 
   async function unlockAudio() {
@@ -174,7 +191,7 @@
       if (r !== "granted") { alert("Motion access was denied. Allow it in Safari settings and reload."); return; }
     }
     window.addEventListener("devicemotion", onMotion);
-    keepAwake();
+    keepAwake(); listenStop();
 
     let left = parseInt($("delay").value, 10);
     setState("arming", "Arming in " + left + "s. Step away");
@@ -189,11 +206,11 @@
     }, 1000);
   }
 
-  function disarm() {
-    if (state === "armed" || state === "alarm") {
+  function disarm(force) {
+    if (!force && (state === "armed" || state === "alarm")) {
       if ($("pinTry").value.trim() !== pin) { $("pinTry").value = ""; $("status").textContent = "Wrong PIN"; return; }
     }
-    clearInterval(timer); sirenOff(); sirenKill();
+    clearInterval(timer); sirenOff(); sirenKill(); closeStop();
     window.removeEventListener("devicemotion", onMotion);
     try { wake && wake.release(); } catch (e) {}
     baseline = null; smooth = null; slow = null; score = 0; liftT = 0; $("pinTry").value = "";
@@ -206,7 +223,7 @@
   }
 
   $("arm").onclick = arm;
-  $("disarm").onclick = disarm;
+  $("disarm").onclick = () => disarm();
   $("test").onclick = testSiren;
 })();
 </script>
