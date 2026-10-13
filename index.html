@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Table Guard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { --bg:#14181f; --fg:#f2f4f8; --mute:#8b94a5; --idle:#2b3340; --arming:#c98a00; --armed:#1f8a4c; --alarm:#d62828; }
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--fg); font:17px/1.4 -apple-system, "Helvetica Neue", Arial, sans-serif;
+         display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px; padding:24px;
+         transition:background .3s; }
+  body[data-s="arming"] { background:var(--arming); }
+  body[data-s="armed"]  { background:var(--armed); }
+  body[data-s="alarm"]  { background:var(--alarm); animation:flash .5s steps(1) infinite; }
+  @keyframes flash { 50% { background:#7a0f0f; } }
+  @media (prefers-reduced-motion: reduce) { body[data-s="alarm"] { animation:none; } }
+  h1 { margin:0; font-size:2.4rem; letter-spacing:-.02em; }
+  #status { font-size:1.2rem; min-height:1.6em; text-align:center; }
+  .panel { width:min(420px,100%); display:flex; flex-direction:column; gap:12px; }
+  label { display:flex; flex-direction:column; gap:4px; color:var(--mute); font-size:.9rem; }
+  body:not([data-s="idle"]) label { color:rgba(255,255,255,.8); }
+  input, select { font:inherit; padding:12px; border-radius:10px; border:1px solid #3a4352; background:#0e1116; color:var(--fg); }
+  button { font:inherit; font-weight:600; padding:16px; border:0; border-radius:12px; background:#f2f4f8; color:#14181f; }
+  button.ghost { background:transparent; color:var(--fg); border:1px solid #4a5568; font-weight:500; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:3px solid #7ab8ff; outline-offset:2px; }
+  .hide { display:none !important; }
+  small { color:var(--mute); text-align:center; max-width:420px; }
+  body:not([data-s="idle"]) small { color:rgba(255,255,255,.8); }
+</style>
+</head>
+<body data-s="idle">
+  <h1>Table Guard</h1>
+  <div id="status" role="status">Not armed</div>
+
+  <div class="panel" id="setup">
+    <label>ntfy topic (same as in your Android ntfy app)
+      <input id="topic" autocapitalize="off" autocorrect="off" placeholder="evan-ipad-7x9k2q">
+    </label>
+    <label>PIN to disarm
+      <input id="pin" type="password" inputmode="numeric" maxlength="8" placeholder="e.g. 4821">
+    </label>
+    <label>Sensitivity
+      <select id="sens">
+        <option value="0.5">High (tiny nudge)</option>
+        <option value="1.2" selected>Medium</option>
+        <option value="2.5">Low (clear pickup)</option>
+      </select>
+    </label>
+    <label>Delay before arming
+      <select id="delay">
+        <option value="5">5 seconds</option>
+        <option value="10" selected>10 seconds</option>
+        <option value="20">20 seconds</option>
+      </select>
+    </label>
+    <button id="arm">Arm</button>
+    <button id="test" class="ghost">Test siren (1 second)</button>
+  </div>
+
+  <div class="panel hide" id="live">
+    <label id="pinLabel" class="hide">Enter PIN to disarm
+      <input id="pinTry" type="password" inputmode="numeric" maxlength="8">
+    </label>
+    <button id="disarm">Disarm</button>
+  </div>
+
+  <small>Keep this page open and the screen on. Set the iPad volume to maximum first. Use Guided Access so it can't be closed.</small>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const body = document.body;
+  let state = "idle", ctx = null, osc = null, lfo = null, wake = null;
+  let smooth = null, baseline = null, hits = 0, thr = 1.2, timer = null, pin = "", topic = "";
+
+  // Remember settings on this device
+  try {
+    $("topic").value = localStorage.getItem("tg_topic") || "";
+    $("sens").value  = localStorage.getItem("tg_sens")  || "1.2";
+    $("delay").value = localStorage.getItem("tg_delay") || "10";
+  } catch (e) {}
+
+  function setState(s, text) {
+    state = s; body.dataset.s = s; $("status").textContent = text;
+    $("setup").classList.toggle("hide", s !== "idle");
+    $("live").classList.toggle("hide", s === "idle");
+    $("pinLabel").classList.toggle("hide", s !== "alarm" && s !== "armed");
+  }
+
+  // Siren: square wave sweeping 800-1600 Hz
+  function sirenOn() {
+    if (osc) return;
+    osc = ctx.createOscillator(); osc.type = "square"; osc.frequency.value = 1200;
+    lfo = ctx.createOscillator(); lfo.frequency.value = 2.5;
+    const lfoGain = ctx.createGain(); lfoGain.gain.value = 400;
+    const out = ctx.createGain(); out.gain.value = 1;
+    lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+    osc.connect(out); out.connect(ctx.destination);
+    osc.start(); lfo.start();
+  }
+  function sirenOff() {
+    try { osc && osc.stop(); lfo && lfo.stop(); } catch (e) {}
+    osc = lfo = null;
+  }
+
+  async function keepAwake() {
+    try { wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state !== "idle") keepAwake();
+  });
+
+  function notify(msg) {
+    const url = "https://ntfy.sh/" + encodeURIComponent(topic) +
+                "?priority=5&title=" + encodeURIComponent("Table Guard");
+    fetch(url, { method: "POST", body: msg }).catch(() => {});
+  }
+
+  function onMotion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    const v = [a.x, a.y, a.z];
+    smooth = smooth ? smooth.map((s, i) => s * 0.8 + v[i] * 0.2) : v;
+    if (state !== "armed" || !baseline) return;
+    const d = Math.hypot(smooth[0]-baseline[0], smooth[1]-baseline[1], smooth[2]-baseline[2]);
+    hits = d > thr ? hits + 1 : 0;
+    if (hits >= 3) trigger();
+  }
+
+  function trigger() {
+    if (state === "alarm") return;
+    setState("alarm", "MOVED! Alarm on");
+    sirenOn();
+    notify("iPad was moved at the table!");
+  }
+
+  async function arm() {
+    pin = $("pin").value.trim(); topic = $("topic").value.trim();
+    if (pin.length < 4) { alert("Set a PIN with at least 4 digits."); return; }
+    if (!topic) { alert("Enter your ntfy topic."); return; }
+    try {
+      localStorage.setItem("tg_topic", topic);
+      localStorage.setItem("tg_sens", $("sens").value);
+      localStorage.setItem("tg_delay", $("delay").value);
+    } catch (e) {}
+    thr = parseFloat($("sens").value);
+
+    // These must happen inside the tap
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") await ctx.resume();
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (r !== "granted") { alert("Motion access was denied. Allow it in Safari settings and reload."); return; }
+    }
+    window.addEventListener("devicemotion", onMotion);
+    keepAwake();
+
+    let left = parseInt($("delay").value, 10);
+    setState("arming", "Arming in " + left + "s. Step away");
+    timer = setInterval(() => {
+      left--;
+      if (left > 0) { $("status").textContent = "Arming in " + left + "s. Step away"; return; }
+      clearInterval(timer);
+      if (!smooth) { setState("idle", "No motion data. Check Safari motion permission"); return; }
+      baseline = smooth.slice(); hits = 0;
+      setState("armed", "Armed. Guarding the iPad");
+      notify("Table Guard armed");
+    }, 1000);
+  }
+
+  function disarm() {
+    if (state === "armed" || state === "alarm") {
+      if ($("pinTry").value.trim() !== pin) { $("pinTry").value = ""; $("status").textContent = "Wrong PIN"; return; }
+    }
+    clearInterval(timer); sirenOff();
+    window.removeEventListener("devicemotion", onMotion);
+    try { wake && wake.release(); } catch (e) {}
+    baseline = null; smooth = null; hits = 0; $("pinTry").value = "";
+    setState("idle", "Not armed");
+  }
+
+  async function testSiren() {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") await ctx.resume();
+    sirenOn(); setTimeout(sirenOff, 1000);
+  }
+
+  $("arm").onclick = arm;
+  $("disarm").onclick = disarm;
+  $("test").onclick = testSiren;
+})();
+</script>
+</body>
+</html>
