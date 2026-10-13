@@ -137,6 +137,8 @@
   }
 
   async function unlockAudio() {
+    if (navigator.audioSession) navigator.audioSession.type = "playback";
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
     ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
     await ctx.resume();
     const s = ctx.createBufferSource();
