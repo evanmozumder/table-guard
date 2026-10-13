@@ -90,19 +90,26 @@
   }
 
   // Siren: square wave sweeping 800-1600 Hz
-  function sirenOn() {
+  let out = null;
+  function sirenInit() {
     if (osc) return;
     osc = ctx.createOscillator(); osc.type = "square"; osc.frequency.value = 1200;
     lfo = ctx.createOscillator(); lfo.frequency.value = 2.5;
     const lfoGain = ctx.createGain(); lfoGain.gain.value = 400;
-    const out = ctx.createGain(); out.gain.value = 1;
+    out = ctx.createGain(); out.gain.value = 0.0001;
     lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
     osc.connect(out); out.connect(ctx.destination);
     osc.start(); lfo.start();
   }
-  function sirenOff() {
+  function sirenOn() {
+    sirenInit();
+    if (ctx.state !== "running") ctx.resume();
+    out.gain.value = 1;
+  }
+  function sirenOff() { if (out) out.gain.value = 0.0001; }
+  function sirenKill() {
     try { osc && osc.stop(); lfo && lfo.stop(); } catch (e) {}
-    osc = lfo = null;
+    osc = lfo = out = null;
   }
 
   async function keepAwake() {
@@ -130,7 +137,7 @@
     const tilt = Math.hypot(smooth[0]-baseline[0], smooth[1]-baseline[1], smooth[2]-baseline[2]);
     score = act > thr ? score + dt : Math.max(0, score - dt * 0.5);
     liftT = tilt > 4 ? liftT + dt : 0;
-    if (score >= 1500 || liftT >= 1000) trigger();
+    if (score >= 1200 || liftT >= 1000) trigger();
   }
 
   function trigger() {
@@ -161,7 +168,7 @@
     thr = parseFloat($("sens").value);
 
     // These must happen inside the tap
-    unlockAudio();
+    unlockAudio(); sirenInit();
     if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
       const r = await DeviceMotionEvent.requestPermission();
       if (r !== "granted") { alert("Motion access was denied. Allow it in Safari settings and reload."); return; }
@@ -186,7 +193,7 @@
     if (state === "armed" || state === "alarm") {
       if ($("pinTry").value.trim() !== pin) { $("pinTry").value = ""; $("status").textContent = "Wrong PIN"; return; }
     }
-    clearInterval(timer); sirenOff();
+    clearInterval(timer); sirenOff(); sirenKill();
     window.removeEventListener("devicemotion", onMotion);
     try { wake && wake.release(); } catch (e) {}
     baseline = null; smooth = null; slow = null; score = 0; liftT = 0; $("pinTry").value = "";
