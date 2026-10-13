@@ -43,9 +43,9 @@
     </label>
     <label>Sensitivity
       <select id="sens">
-        <option value="0.5">High (tiny nudge)</option>
-        <option value="1.2" selected>Medium</option>
-        <option value="2.5">Low (clear pickup)</option>
+        <option value="0.8">High</option>
+        <option value="1.5" selected>Medium</option>
+        <option value="2.5">Low</option>
       </select>
     </label>
     <label>Delay before arming
@@ -73,12 +73,12 @@
   const $ = id => document.getElementById(id);
   const body = document.body;
   let state = "idle", ctx = null, osc = null, lfo = null, wake = null;
-  let smooth = null, baseline = null, hits = 0, thr = 1.2, timer = null, pin = "", topic = "";
+  let smooth = null, slow = null, baseline = null, score = 0, lastT = 0, liftT = 0, thr = 1.5, timer = null, pin = "", topic = "";
 
   // Remember settings on this device
   try {
     $("topic").value = localStorage.getItem("tg_topic") || "";
-    $("sens").value  = localStorage.getItem("tg_sens")  || "1.2";
+    $("sens").value  = localStorage.getItem("tg_sens")  || "1.5";
     $("delay").value = localStorage.getItem("tg_delay") || "10";
   } catch (e) {}
 
@@ -122,11 +122,15 @@
     const a = e.accelerationIncludingGravity;
     if (!a || a.x == null) return;
     const v = [a.x, a.y, a.z];
+    const now = performance.now(), dt = lastT ? Math.min(now - lastT, 100) : 0; lastT = now;
     smooth = smooth ? smooth.map((s, i) => s * 0.8 + v[i] * 0.2) : v;
+    slow = slow ? slow.map((s, i) => s * 0.99 + v[i] * 0.01) : v.slice();
     if (state !== "armed" || !baseline) return;
-    const d = Math.hypot(smooth[0]-baseline[0], smooth[1]-baseline[1], smooth[2]-baseline[2]);
-    hits = d > thr ? hits + 1 : 0;
-    if (hits >= 3) trigger();
+    const act = Math.hypot(v[0]-slow[0], v[1]-slow[1], v[2]-slow[2]);
+    const tilt = Math.hypot(smooth[0]-baseline[0], smooth[1]-baseline[1], smooth[2]-baseline[2]);
+    score = act > thr ? score + dt : Math.max(0, score - dt * 0.5);
+    liftT = tilt > 4 ? liftT + dt : 0;
+    if (score >= 1500 || liftT >= 1000) trigger();
   }
 
   function trigger() {
@@ -172,7 +176,7 @@
       if (left > 0) { $("status").textContent = "Arming in " + left + "s. Step away"; return; }
       clearInterval(timer);
       if (!smooth) { setState("idle", "No motion data. Check Safari motion permission"); return; }
-      baseline = smooth.slice(); hits = 0;
+      baseline = smooth.slice(); score = 0; liftT = 0;
       setState("armed", "Armed. Guarding the iPad");
       notify("Table Guard armed");
     }, 1000);
@@ -185,7 +189,7 @@
     clearInterval(timer); sirenOff();
     window.removeEventListener("devicemotion", onMotion);
     try { wake && wake.release(); } catch (e) {}
-    baseline = null; smooth = null; hits = 0; $("pinTry").value = "";
+    baseline = null; smooth = null; slow = null; score = 0; liftT = 0; $("pinTry").value = "";
     setState("idle", "Not armed");
   }
 
