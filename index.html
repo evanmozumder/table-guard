@@ -45,7 +45,7 @@
       <select id="sens">
         <option value="0.8">High</option>
         <option value="1.5">Medium</option>
-        <option value="2.5 selected">Low</option>
+        <option value="5 selected">Low</option>
       </select>
     </label>
     <label>Delay before arming
@@ -153,8 +153,8 @@
     const act = Math.hypot(v[0]-slow[0], v[1]-slow[1], v[2]-slow[2]);
     const tilt = Math.hypot(smooth[0]-baseline[0], smooth[1]-baseline[1], smooth[2]-baseline[2]);
     score = act > thr ? score + dt : Math.max(0, score - dt * 0.5);
-    liftT = tilt > 5 ? liftT + dt : 0;
-    if (score >= 1500 || liftT >= 1000) trigger();
+    liftT = tilt > 10 ? liftT + dt : 0;
+    if (score >= 2000 || liftT >= 1000) trigger();
   }
 
   function trigger() {
