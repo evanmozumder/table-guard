@@ -136,6 +136,14 @@
     notify("iPad was moved at the table!");
   }
 
+  async function unlockAudio() {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    const s = ctx.createBufferSource();
+    s.buffer = ctx.createBuffer(1, 1, 22050);
+    s.connect(ctx.destination); s.start(0);
+  }
+
   async function arm() {
     pin = $("pin").value.trim(); topic = $("topic").value.trim();
     if (pin.length < 4) { alert("Set a PIN with at least 4 digits."); return; }
@@ -148,8 +156,7 @@
     thr = parseFloat($("sens").value);
 
     // These must happen inside the tap
-    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === "suspended") await ctx.resume();
+    unlockAudio();
     if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
       const r = await DeviceMotionEvent.requestPermission();
       if (r !== "granted") { alert("Motion access was denied. Allow it in Safari settings and reload."); return; }
@@ -182,9 +189,8 @@
   }
 
   async function testSiren() {
-    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === "suspended") await ctx.resume();
-    sirenOn(); setTimeout(sirenOff, 1000);
+    await unlockAudio();
+    sirenOn(); setTimeout(sirenOff, 1500);
   }
 
   $("arm").onclick = arm;
